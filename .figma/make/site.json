@@ -1,0 +1,10 @@
+{
+  "description": "Manage and oversee user data efficiently with a streamlined admin interface, designed for administrators to interact seamlessly with Superbase.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
