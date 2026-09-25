@@ -28,6 +28,7 @@ export default function AdminShell() {
       case 'academic-levels': return <CollectionManager key={activePage} title="Academic Levels & Pricing" collection="academic-levels" description="Publish the levels and prices shown on the student website. Prices are in naira." />;
       case 'courses': return <CoursesManager />;
       case 'lessons': return <CollectionManager key={activePage} title="Lessons & Topics" collection="lessons" description="Create and maintain course lessons and topics." />;
+      case 'videos': return <CollectionManager key={activePage} title="Tutorial Videos" collection="lessons" description="Add or edit a course lesson, paste its YouTube link or select an uploaded video, then set its status to published. These are the same lessons shown under Lessons & Topics." />;
       case 'resources': return <CollectionManager key={activePage} title="Resources & PDFs" collection="resources" description="Add study materials. Upload files in Media Library, then choose them here." />;
       case 'case-law': return <CaseLawManager />;
       case 'mcq': return <CollectionManager key={activePage} title="MCQ Questions" collection="mcq" description="Build and maintain the multiple-choice question bank." />;

@@ -202,7 +202,15 @@ export default function CollectionManager({
         record.file_size = file.metadata?.size
       }
     }
-    if (collection === 'academic-levels') record.level = Number(record.level);
+    if (collection === 'academic-levels') {
+      record.level = Number(record.level);
+      if (records.some(item => item.id !== record.id && Number(item.level) === record.level)) {
+        setError('This academic level already exists. Edit its existing price and details instead.'); return;
+      }
+      if (!Number.isFinite(record.price) || record.price < 0 || !Number.isInteger(record.duration_months) || record.duration_months < 1) {
+        setError('Enter a valid price and a subscription length of at least one whole month.'); return;
+      }
+    }
     if (collection === 'lessons' && record.video_url) {
       try {
         const url = new URL(record.video_url);
@@ -355,7 +363,7 @@ export default function CollectionManager({
                       {...props}
                       type={field.type || "text"}
                       min={field.min}
-                      step={field.type === "number" ? 1 : undefined}
+                      step={field.type === "number" ? (field.key === "price" ? 0.01 : 1) : undefined}
                       onChange={(event) =>
                         change(field.key, event.target.value)
                       }
@@ -476,7 +484,9 @@ export default function CollectionManager({
                   `Untitled ${config.name}`}
               </div>
               <div className="text-xs truncate mt-1 text-slate-400">
-                {record.description || record.status || record.type || "Saved"}
+                {collection === 'academic-levels'
+                  ? `${record.level} Level · ₦${Number(record.price || 0).toLocaleString('en-NG')} · ${record.duration_months ?? '—'} months · ${record.status}`
+                  : record.description || record.status || record.type || "Saved"}
               </div>
             </div>
             {collection !== "student-activity" && <div className="flex gap-2">

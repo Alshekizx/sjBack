@@ -3,6 +3,8 @@ import { useAuth } from './AuthContext';
 
 const BREADCRUMB_MAP: Record<string, string[]> = {
   dashboard: ['Dashboard'],
+  'academic-levels': ['Academic Content', 'Levels & Pricing'],
+  videos: ['Academic Content', 'Tutorial Videos'],
   courses: ['Academic Content', 'Courses & Levels'],
   lessons: ['Academic Content', 'Lessons & Topics'],
   resources: ['Academic Content', 'Resources & PDFs'],

@@ -17,6 +17,7 @@ const NAV_ITEMS: NavItem[] = [
       { id: 'academic-levels', label: 'Levels & Pricing' },
       { id: 'courses', label: 'Courses' },
       { id: 'lessons', label: 'Lessons & Topics' },
+      { id: 'videos', label: 'Tutorial Videos' },
       { id: 'resources', label: 'Resources & PDFs' },
       { id: 'case-law', label: 'Case Law' },
     ],

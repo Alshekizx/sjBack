@@ -21,6 +21,8 @@ const MOCK_STATS: Stat[] = [
 ];
 
 const QUICK_ACTIONS = [
+  { label: 'Tutorial Videos', icon: '▶️', page: 'videos' },
+  { label: 'Levels & Pricing', icon: '💰', page: 'academic-levels' },
   { label: 'Create Course', icon: '📚', page: 'courses' },
   { label: 'Upload Resource', icon: '📎', page: 'resources' },
   { label: 'Add Case Law', icon: '⚖️', page: 'case-law' },
