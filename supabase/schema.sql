@@ -76,6 +76,8 @@ create table if not exists public.academic_levels (
   name text not null,
   description text not null default '',
   price numeric(12,2) not null default 0 check (price >= 0),
+  duration_months integer not null default 6 check (duration_months > 0),
+  objectives text[] not null default '{}',
   sort_order integer not null default 0,
   status text not null default 'draft' check (status in ('draft','published','archived')),
   created_at timestamptz not null default timezone('utc', now()),
@@ -87,6 +89,7 @@ create table if not exists public.courses (
   academic_level_id uuid references public.academic_levels(id) on delete set null,
   title text not null,
   code text,
+  instructor text not null default '',
   description text not null default '',
   academic_level text,
   status text not null default 'draft' check (status in ('draft','published','archived')),
@@ -513,6 +516,12 @@ create policy "admin_media_access" on storage.objects for all to authenticated u
 alter table public.academic_levels add column if not exists duration_months integer not null default 6 check (duration_months > 0);
 alter table public.academic_levels add column if not exists objectives text[] not null default '{}';
 alter table public.courses add column if not exists instructor text not null default '';
+comment on column public.academic_levels.price is
+  'Subscription price in Nigerian naira, including up to two decimal places. Managed through Levels & Pricing.';
+comment on column public.academic_levels.duration_months is
+  'Subscription duration in whole months. Used by student pricing cards and payment fulfilment.';
+comment on column public.academic_levels.objectives is
+  'Learning objectives entered one per line in the admin level editor.';
 -- No published content is overwritten.
 create table if not exists public.student_case_bookmarks (
   student_id uuid not null references public.student_profiles(id) on delete cascade,
