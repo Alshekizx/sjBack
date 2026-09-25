@@ -103,12 +103,19 @@ create table if not exists public.lessons (
   title text not null,
   description text not null default '',
   content text,
+  -- YouTube video URL, direct video URL, or media:<storage path> for uploads.
   video_url text,
   sort_order integer not null default 0,
   status text not null default 'draft' check (status in ('draft','published','archived')),
   created_at timestamptz not null default timezone('utc', now()),
   updated_at timestamptz not null default timezone('utc', now())
 );
+
+-- Upgrade existing lesson tables too: CREATE TABLE IF NOT EXISTS does not add
+-- missing columns. Existing video links are preserved.
+alter table public.lessons add column if not exists video_url text;
+comment on column public.lessons.video_url is
+  'Optional tutorial video: YouTube watch/share/shorts/live/embed URL, direct MP4/WebM URL, or media:<storage path>. Set lesson status to published to show it on the student website.';
 
 create table if not exists public.resources (
   id uuid primary key default gen_random_uuid(),
@@ -326,7 +333,8 @@ $$;
 
 -- Bootstrap is limited to a completely empty admin_profiles table. Run it once
 -- from the Supabase SQL Editor after creating the Auth user. It cannot be used
--- to add a second super admin; use assign_admin_role after bootstrap.
+-- to add a second super admin; use assign_admin_role from an authenticated
+-- super-admin session, or grant_super_admin_by_email in the SQL Editor.
 create or replace function public.bootstrap_first_super_admin(target_email text)
 returns void language plpgsql security definer set search_path = public, auth
 as $$
@@ -346,6 +354,37 @@ begin
 end;
 $$;
 
+-- SQL Editor only: promote an existing Auth account by email. SECURITY INVOKER
+-- requires the caller's own database privileges; browser roles cannot execute it.
+-- This does not create an Auth account or change its password.
+create or replace function public.grant_super_admin_by_email(target_email text)
+returns void language plpgsql security invoker set search_path = public, auth
+as $$
+declare target_id uuid;
+begin
+  if target_email is null or btrim(target_email) = '' then
+    raise exception 'An existing Auth user email is required';
+  end if;
+
+  select id into target_id from auth.users
+  where lower(email) = lower(btrim(target_email));
+  if target_id is null then
+    raise exception 'User % not found. Create it in Authentication > Users first.', target_email;
+  end if;
+
+  update auth.users
+  set raw_app_meta_data = coalesce(raw_app_meta_data, '{}'::jsonb)
+    || jsonb_build_object('role', 'super_admin')
+  where id = target_id;
+
+  insert into public.admin_profiles (user_id, role, is_active)
+  values (target_id, 'super_admin', true)
+  on conflict (user_id) do update
+  set role = excluded.role, is_active = true, updated_at = timezone('utc', now());
+end;
+$$;
+
+revoke all on function public.grant_super_admin_by_email(text) from public, anon, authenticated, service_role;
 revoke all on function public.assign_admin_role(uuid, text) from public;
 revoke all on function public.set_admin_active(uuid, boolean) from public;
 revoke all on function public.bootstrap_first_super_admin(text) from public;
@@ -456,6 +495,11 @@ on conflict (slug) do nothing;
 -- FIRST SUPER ADMIN (run once after creating this Auth user).
 -- Execute this single statement separately in the Supabase SQL Editor:
 -- select public.bootstrap_first_super_admin('seyiduncan40@gmail.com');
+
+-- ADDITIONAL SUPER ADMIN (after creating this account in Authentication > Users).
+-- Run separately in the Supabase SQL Editor using the postgres database role:
+-- select public.grant_super_admin_by_email('adeyemisewa0@gmail.com');
+-- The account must sign out and sign in again to receive its new role.
 
 -- The existing MediaManager uses the `media` bucket. Files are private and can be
 -- listed/uploaded/deleted only by admins (switch its public URLs to signed URLs).

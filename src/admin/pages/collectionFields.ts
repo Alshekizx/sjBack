@@ -84,9 +84,9 @@ export const collectionFields: Record<string, {
       },
       {
         key: "video_url",
-        label: "Video link",
+        label: "Tutorial video link (YouTube or video file)",
         type: "url",
-        hint: "Paste the full video link, starting with https://.",
+        hint: "Paste a YouTube watch, Share, Shorts or live video URL, or a direct MP4/WebM link. Set the lesson status to published when ready.",
       },
       { key: "video_file", label: "Uploaded video", type: "select", source: "media", hint: "Choose a video from Media Library, or enter a video link above." },
       { key: "sort_order", label: "Lesson order", type: "number", min: 0 },

@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react"
+import { youtubeEmbedUrl } from "../../lib/video"
 import { adminApi } from "../../lib/adminApi"
 import { supabase } from "../../lib/supabase"
 import { collectionFields } from "./collectionFields"
@@ -137,6 +138,8 @@ export default function CollectionManager({
         ? {
             ...prev,
             [key]: value,
+            ...(collection === "lessons" && key === "video_url" && value ? { video_file: "" } : {}),
+            ...(collection === "lessons" && key === "video_file" && value ? { video_url: "" } : {}),
             ...(key === "course_id" ? { lesson_id: "" } : {}),
           }
         : prev,
@@ -200,6 +203,15 @@ export default function CollectionManager({
       }
     }
     if (collection === 'academic-levels') record.level = Number(record.level);
+    if (collection === 'lessons' && record.video_url) {
+      try {
+        const url = new URL(record.video_url);
+        if (!['https:', 'http:'].includes(url.protocol)) throw new Error();
+        if (['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be', 'youtube-nocookie.com', 'www.youtube-nocookie.com'].includes(url.hostname) && !youtubeEmbedUrl(record.video_url)) {
+          setError('Enter a link to an individual YouTube video, rather than a channel or playlist.'); return;
+        }
+      } catch { setError('Enter a valid video URL starting with https://.'); return; }
+    }
     if (collection === 'lessons' && record.video_file) record.video_url = `media:${record.video_file}`;
     setSaving(true)
     setError("")
@@ -348,6 +360,9 @@ export default function CollectionManager({
                         change(field.key, event.target.value)
                       }
                     />
+                  )}
+                  {collection === 'lessons' && field.key === 'video_url' && youtubeEmbedUrl(String(value)) && (
+                    <iframe src={youtubeEmbedUrl(String(value))!} title="Tutorial video preview" className="w-full aspect-video rounded-lg mt-3" allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; fullscreen" referrerPolicy="strict-origin-when-cross-origin" allowFullScreen />
                   )}
                   {field.hint && (
                     <p
