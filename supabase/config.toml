@@ -1,0 +1,4 @@
+[functions.make-server-f63d7d22]
+# Paystack cannot send a Supabase JWT. Routes validate user tokens themselves;
+# the webhook validates the Paystack HMAC signature.
+verify_jwt = false

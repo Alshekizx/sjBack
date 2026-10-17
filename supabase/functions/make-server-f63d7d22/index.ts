@@ -59,7 +59,7 @@ async function requireAdmin(c: any) {
   if (!token) return null;
   const auth = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
   const { data, error } = await auth.auth.getUser(token);
-  if (error || !data.user) return null;
+  if (error || !data.user || data.user.app_metadata?.admin_active === false) return null;
   const role = data.user.app_metadata?.role;
   if (!['super_admin', 'admin', 'content_manager', 'page_manager', 'support_manager'].includes(role)) return null;
   return { id: data.user.id, name: data.user.user_metadata?.full_name || data.user.email, role };
@@ -91,7 +91,54 @@ app.use(
 
 // Health check endpoint
 app.get("/make-server-f63d7d22/health", (c) => {
-  return c.json({ status: "ok" });
+  return c.json({ status: "ok", capabilities: ["admin-auth-accounts-v1"] });
+});
+
+// Auth is the source of truth. Never store passwords or login roles in KV.
+const ADMIN_ROLES = ['super_admin', 'admin', 'content_manager', 'page_manager', 'support_manager'];
+const adminView = (user: any) => ({
+  auth_account: true, id: user.id, email: user.email || '', full_name: user.user_metadata?.full_name || user.user_metadata?.name || user.email,
+  role: user.app_metadata.role, is_active: user.app_metadata.admin_active !== false,
+  created_at: user.created_at, last_login: user.last_sign_in_at,
+});
+async function allAuthUsers() {
+  const users: any[] = [];
+  for (let page = 1; ; page++) {
+    const { data, error } = await database().auth.admin.listUsers({ page, perPage: 1000 });
+    if (error) throw error;
+    users.push(...data.users);
+    if (data.users.length < 1000) return users;
+  }
+}
+app.post('/make-server-f63d7d22/admin/admin-users', async c => {
+  const actor = await requireAdmin(c);
+  if (!actor) return c.json({ error: 'Administrator authentication required' }, 401);
+  if (actor.role !== 'super_admin') return c.json({ error: 'Only super administrators can manage login access' }, 403);
+  const body = await c.req.json();
+  const email = String(body.email || '').trim().toLowerCase();
+  const name = String(body.full_name || '').trim();
+  if (!name || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !ADMIN_ROLES.includes(body.role)) return c.json({ error: 'Enter a name, valid email and administrator role.' }, 400);
+  const db = database();
+  if (body.existing_user === true) {
+    const existing = (await allAuthUsers()).find(user => user.email?.toLowerCase() === email);
+    if (!existing) return c.json({ error: 'No account exists for this email. Choose Create account instead.' }, 404);
+    if (existing.id === actor.id) return c.json({ error: 'You cannot change your own access.' }, 400);
+    const { data, error } = await db.auth.admin.updateUserById(existing.id, {
+      app_metadata: { ...existing.app_metadata, role: body.role, admin_active: true },
+      user_metadata: { ...existing.user_metadata, full_name: name },
+    });
+    if (error) return c.json({ error: error.message }, 400);
+    await audit(actor, 'Assigned administrator role', existing.id);
+    return c.json(adminView(data.user));
+  }
+  if (typeof body.password !== 'string' || body.password.length < 12) return c.json({ error: 'Use a password with at least 12 characters.' }, 400);
+  const { data, error } = await db.auth.admin.createUser({
+    email, password: body.password, email_confirm: true,
+    app_metadata: { role: body.role, admin_active: true }, user_metadata: { full_name: name, name },
+  });
+  if (error) return c.json({ error: error.message }, 400);
+  await audit(actor, 'Created administrator account', data.user.id);
+  return c.json(adminView(data.user), 201);
 });
 
 // Authenticated admin data API. Student-facing collections use the relational
@@ -103,6 +150,7 @@ app.get("/make-server-f63d7d22/admin/:collection", async (c) => {
   if (!actor) return c.json({ error: "Administrator authentication required" }, 401);
   if (!COLLECTIONS.has(collection)) return c.json({ error: "Unknown collection" }, 404);
   if (collection === "admin-users" && actor.role !== "super_admin") return c.json({ error: "Only super administrators can manage administrator records" }, 403);
+  if (collection === 'admin-users') return c.json((await allAuthUsers()).filter(user => ADMIN_ROLES.includes(user.app_metadata?.role)).map(adminView));
   if (collection === 'student-activity') {
     const db = database();
     const [attempts, progress] = await Promise.all([
@@ -138,6 +186,19 @@ app.put("/make-server-f63d7d22/admin/:collection/:id", async (c) => {
   if (collection === "admin-users" && actor.role !== "super_admin") return c.json({ error: "Only super administrators can manage administrator records" }, 403);
   if (collection === 'student-activity') return c.json({ error: 'Learning activity is recorded by students and cannot be edited here' }, 405);
   const payload = await c.req.json();
+  if (collection === 'admin-users') {
+    if (id === actor.id) return c.json({ error: 'You cannot change your own access.' }, 400);
+    const db = database();
+    const { data: current, error: lookupError } = await db.auth.admin.getUserById(id);
+    if (lookupError || !current.user || !ADMIN_ROLES.includes(current.user.app_metadata?.role)) return c.json({ error: 'Administrator account not found' }, 404);
+    if (!ADMIN_ROLES.includes(payload.role) || typeof payload.is_active !== 'boolean') return c.json({ error: 'Invalid role or active status' }, 400);
+    const { data, error } = await db.auth.admin.updateUserById(id, {
+      app_metadata: { ...current.user.app_metadata, role: payload.role, admin_active: payload.is_active },
+    });
+    if (error) return c.json({ error: error.message }, 400);
+    await audit(actor, 'Updated administrator access', id);
+    return c.json(adminView(data.user));
+  }
   if (TABLES[collection]) {
     const record = databaseRecord(collection, payload, id);
     if (collection === 'courses' && typeof record.academic_level === 'string') {
@@ -173,6 +234,7 @@ app.delete("/make-server-f63d7d22/admin/:collection/:id", async (c) => {
   if (!actor) return c.json({ error: "Administrator authentication required" }, 401);
   if (!COLLECTIONS.has(collection)) return c.json({ error: "Unknown collection" }, 404);
   if (collection === "admin-users" && actor.role !== "super_admin") return c.json({ error: "Only super administrators can manage administrator records" }, 403);
+  if (collection === 'admin-users') return c.json({ error: 'Deactivate administrator accounts instead of deleting them.' }, 405);
   if (collection === 'student-activity') return c.json({ error: 'Learning activity cannot be deleted here' }, 405);
   if (TABLES[collection]) {
     const { error } = await database().from(TABLES[collection]).delete().eq('id', id);
@@ -186,59 +248,92 @@ app.delete("/make-server-f63d7d22/admin/:collection/:id", async (c) => {
   return c.json({ ok: true });
 });
 
-// Paystack webhook handler — verifies HMAC signature and updates subscription status
-app.post("/make-server-f63d7d22/paystack-webhook", async (c) => {
-  const PAYSTACK_SECRET = Deno.env.get("PAYSTACK_SECRET_KEY");
-  if (!PAYSTACK_SECRET) {
-    return c.json({ error: "Webhook not configured" }, 500);
-  }
-
-  const body = await c.req.text();
-  const signature = c.req.header("x-paystack-signature");
-
-  // Verify HMAC-SHA512 signature
-  const key = await crypto.subtle.importKey(
-    "raw", new TextEncoder().encode(PAYSTACK_SECRET),
-    { name: "HMAC", hash: "SHA-512" }, false, ["sign"]
-  );
-  const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body));
-  const hex = Array.from(new Uint8Array(mac)).map(b => b.toString(16).padStart(2, "0")).join("");
-
-  if (hex !== signature) {
-    return c.json({ error: "Invalid signature" }, 401);
-  }
-
-  const event = JSON.parse(body);
-
-  if (event.event === "charge.success") {
-    const { reference, customer, amount, metadata } = event.data;
-    const studentId = metadata?.student_id;
-    const academicLevelId = metadata?.academic_level_id;
-    if (!studentId || !academicLevelId) return c.json({ error: "Payment metadata is incomplete" }, 400);
+// Server-only Paystack integration. Never accept a browser-supplied price or owner.
+function paymentSecret() {
+  const secret = Deno.env.get('PAYSTACK_SECRET_KEY') || '';
+  if (!/^sk_(test|live)_[a-zA-Z0-9]+$/.test(secret)) throw new Error('Payments are not configured. Please contact support.');
+  return secret;
+}
+async function paystack(path: string, body?: unknown) {
+  const response = await fetch(`https://api.paystack.co/transaction/${path}`, {
+    method: body ? 'POST' : 'GET',
+    headers: { Authorization: `Bearer ${paymentSecret()}`, 'Content-Type': 'application/json' },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  const result = await response.json();
+  if (!response.ok || !result.status) throw new Error('Unable to confirm payment with Paystack. Please try again.');
+  return result.data;
+}
+async function paymentUser(c: any) {
+  const token = (c.req.header('Authorization') || '').replace(/^Bearer\s+/i, '');
+  if (!token) return null;
+  const { data, error } = await database().auth.getUser(token);
+  return error ? null : data.user;
+}
+async function confirmPayment(reference: string) {
+  const transaction = await paystack(`verify/${encodeURIComponent(reference)}`);
+  if (transaction.reference !== reference) throw new Error('Payment reference mismatch');
+  if (transaction.status !== 'success') return { status: transaction.status };
+  if (!Number.isSafeInteger(transaction.amount) || transaction.amount <= 0) throw new Error('Invalid payment amount');
+  const { error } = await database().rpc('fulfil_paystack_payment', {
+    payment_reference: reference, paid_amount: transaction.amount, paid_currency: transaction.currency,
+  });
+  if (error) throw new Error('Payment could not be activated. Please retry verification or contact support with your reference.');
+  return { status: 'success' };
+}
+app.post('/make-server-f63d7d22/payments/initialize', async c => {
+  try {
+    const user = await paymentUser(c);
+    if (!user?.email) return c.json({ error: 'Please sign in before paying.' }, 401);
+    paymentSecret();
+    const site = new URL(Deno.env.get('STUDENT_SITE_URL') || '');
+    if (site.protocol !== 'https:' && !(site.protocol === 'http:' && site.hostname === 'localhost')) throw new Error('Student site URL is not configured.');
+    const { academic_level_id } = await c.req.json();
     const db = database();
-    const { data: existingPayment, error: existingPaymentError } = await db.from('payments').select('id').eq('reference', reference).maybeSingle();
-    if (existingPaymentError) return c.json({ error: existingPaymentError.message }, 500);
-    if (existingPayment) return c.json({ received: true });
-    const startsAt = new Date();
-    const expiresAt = new Date(startsAt);
-    const { data: level, error: levelError } = await db.from('academic_levels').select('duration_months').eq('id', academicLevelId).single();
-    if (levelError) return c.json({ error: levelError.message }, 500);
-    expiresAt.setMonth(expiresAt.getMonth() + level.duration_months);
-    const { data: subscription, error: subscriptionError } = await db.from('subscriptions').insert({
-      student_id: studentId, academic_level_id: academicLevelId, plan: metadata?.plan || 'Academic level subscription',
-      status: 'active', starts_at: startsAt.toISOString(), expires_at: expiresAt.toISOString(),
-    }).select('id').single();
-    if (subscriptionError) return c.json({ error: subscriptionError.message }, 500);
-    const { error: paymentError } = await db.from('payments').upsert({
-      student_id: studentId, subscription_id: subscription.id, reference, amount: Number(amount) / 100,
-      currency: event.data.currency || 'NGN', plan: metadata?.plan, status: 'success', paid_at: event.data.paid_at || new Date().toISOString(), provider_payload: event.data,
-    }, { onConflict: 'reference' });
-    if (paymentError) return c.json({ error: paymentError.message }, 500);
-    const { error: profileError } = await db.from('student_profiles').update({ subscription_status: 'active' }).eq('id', studentId);
-    if (profileError) return c.json({ error: profileError.message }, 500);
-  }
-
-  return c.json({ received: true });
+    const { data: profile } = await db.from('student_profiles').select('is_active').eq('id', user.id).single();
+    if (!profile?.is_active) return c.json({ error: 'Your account is inactive.' }, 403);
+    const { data: level, error } = await db.from('academic_levels').select('id,name,price,duration_months').eq('id', academic_level_id).eq('status', 'published').single();
+    if (error || !level) return c.json({ error: 'This package is unavailable.' }, 400);
+    const amount = Math.round(Number(level.price) * 100);
+    if (!Number.isSafeInteger(amount) || amount <= 0) return c.json({ error: 'This package does not have a valid payment price.' }, 400);
+    const reference = `sj-${crypto.randomUUID()}`;
+    const { error: orderError } = await db.from('payment_orders').insert({ reference, student_id: user.id, academic_level_id: level.id, amount_kobo: amount, currency: 'NGN', duration_months: level.duration_months, plan: level.name });
+    if (orderError) throw new Error('Unable to create payment order. Please contact support.');
+    const transaction = await paystack('initialize', { email: user.email, amount, currency: 'NGN', reference, callback_url: new URL('/payment/success', site).href });
+    return c.json({ authorization_url: transaction.authorization_url, reference });
+  } catch (error) { return c.json({ error: error instanceof Error ? error.message : 'Unable to start payment.' }, 503); }
+});
+app.post('/make-server-f63d7d22/payments/verify', async c => {
+  try {
+    const user = await paymentUser(c);
+    if (!user) return c.json({ error: 'Please sign in to verify payment.' }, 401);
+    const { reference } = await c.req.json();
+    if (typeof reference !== 'string' || reference.length > 100) return c.json({ error: 'Invalid reference.' }, 400);
+    const { data: order, error } = await database().from('payment_orders').select('reference').eq('reference', reference).eq('student_id', user.id).maybeSingle();
+    if (error) throw new Error('Unable to load payment order.');
+    if (!order) return c.json({ error: 'Payment order not found.' }, 404);
+    return c.json(await confirmPayment(reference));
+  } catch (error) { return c.json({ error: error instanceof Error ? error.message : 'Unable to verify payment.' }, 503); }
+});
+app.post('/make-server-f63d7d22/paystack-webhook', async c => {
+  try {
+    const body = await c.req.text();
+    const signature = c.req.header('x-paystack-signature') || '';
+    if (!/^[a-f0-9]{128}$/i.test(signature)) return c.json({ error: 'Invalid signature' }, 401);
+    const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(paymentSecret()), { name: 'HMAC', hash: 'SHA-512' }, false, ['verify']);
+    const bytes = Uint8Array.from(signature.match(/../g)!, byte => parseInt(byte, 16));
+    if (!await crypto.subtle.verify('HMAC', key, bytes, new TextEncoder().encode(body))) return c.json({ error: 'Invalid signature' }, 401);
+    const event = JSON.parse(body);
+    if (event.event === 'charge.success') {
+      const reference = event.data?.reference;
+      if (typeof reference !== 'string') return c.json({ error: 'Invalid reference' }, 400);
+      const { data: order, error } = await database().from('payment_orders').select('reference').eq('reference', reference).maybeSingle();
+      if (error) throw error;
+      // Other integrations on the same Paystack account are not our orders.
+      if (order) await confirmPayment(reference);
+    }
+    return c.json({ received: true });
+  } catch { return c.json({ error: 'Webhook processing failed; retry required.' }, 503); }
 });
 
 // Get payment status by reference (admin use only)

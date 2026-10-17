@@ -20,6 +20,7 @@ const ROLE_HIERARCHY: Record<AdminRole, number> = {
 };
 
 const toAdminUser = (authUser: any): AdminUser | null => {
+  if (!authUser || authUser.app_metadata?.admin_active === false) return null;
   const role = authUser.app_metadata?.role;
   if (!['super_admin', 'admin', 'content_manager', 'page_manager', 'support_manager'].includes(role)) return null;
   return {
@@ -34,7 +35,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setUser(data.session?.user ? toAdminUser(data.session.user) : null)).catch(() => setUser(null)).finally(() => setLoading(false));
+    supabase.auth.getUser().then(({ data }) => setUser(data.user ? toAdminUser(data.user) : null)).catch(() => setUser(null)).finally(() => setLoading(false));
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => setUser(session?.user ? toAdminUser(session.user) : null));
     return () => listener.subscription.unsubscribe();
   }, []);
